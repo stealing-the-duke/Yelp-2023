@@ -1,0 +1,940 @@
+---
+title: "240 LA Restaurants"
+author: "Sterling LeDuc"
+date: "2025-06-24"
+output:
+  html_document: default
+  pdf_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(quanteda)
+library(quanteda.textmodels)
+library(quanteda.textplots)
+library(quanteda.textstats)
+library(tidyverse)
+library(readtext)
+library(skimr)
+library(text2vec)
+library(lsa)
+library(LSAfun)
+library(stringi)
+library(sentimentr)
+library(broom)
+```
+
+# Import Data
+
+```{r import}
+#importing data
+library(readr)
+yelp1 <- read_csv("top 240 restaurants recommanded in los angeles 2.csv", locale = locale(encoding = "UTF-8"))
+
+
+
+head(yelp1$Comment)
+```
+
+
+
+# Initial Inspection
+
+```{r inspection}
+#initial data inspection
+skim(yelp1)
+
+```
+
+## StarRating by Style
+
+```{r StarRating by Style}
+#best
+yelp1 |> group_by(Style) |> summarize(mean = mean(StarRating)) |> arrange(desc(mean)) |> head()
+
+```
+# Changing Style to Ethnicity and Food Type
+
+```{r}
+library(stringr)
+
+yelp1$style_clean <- str_replace_all(yelp1$Style, "[^A-Za-z\\s]", "")
+
+
+ethnicities <- "(?i)(Italian|French|Spanish|Greek|German|Turkish|British|Irish|Portuguese|Polish|Hungarian|Scandinavian|Russian|Balkan|Eastern European|Swiss|Austrian|Chinese|Japanese|Korean|Thai|Laotian| Vietnamese|Indian|Pakistani|Bangladeshi|Filipino|Indonesian|Malaysian|Sri Lankan|Tibetan|Burmese|Mongolian|Middle Eastern|Lebanese|Persian|Iranian|Afghan|Moroccan|Ethiopian|Nigerian|South African|Egyptian|Tunisian|Kenyan|West African|North African|American|Cajun|Creole|Tex-Mex|Mexican|Brazilian|Argentine|Peruvian|Colombian|Cuban|Caribbean|Puerto Rican|Latin American|Venezuelan|Chilean|Australian|New Zealand|Mediterranean|Asian Fusion|Latin Fusion|Pan-Asian|Global|International)"
+
+yelp2 <- yelp1 %>%
+  mutate(
+    ethnicity = str_extract(yelp1$style_clean, ethnicities),
+    food_type = str_remove_all(yelp1$style_clean, ethnicities)
+  ) %>%
+  mutate(food_type = str_trim(str_replace(food_type, "^[-–]", "")))
+
+yelp2$Comment <- iconv(yelp2$Comment, from = "latin1", to = "UTF-8", sub = "")
+
+skim(yelp2)
+
+```
+
+```{r best ethnicity}
+#best
+yelp2 |> group_by(ethnicity) |> summarize(mean = mean(StarRating)) |> arrange(desc(mean)) |> head()
+
+```
+
+```{r worst ethnicity}
+#best
+yelp2 |> group_by(ethnicity) |> summarize(mean = mean(StarRating)) |> arrange(desc(mean)) |> tail()
+
+```
+
+```{r best food type}
+#best
+yelp2 |> group_by(food_type) |> summarize(mean = mean(StarRating)) |> arrange(desc(mean)) |> head()
+
+```
+
+```{r worst food type}
+#best
+yelp2 |> group_by(food_type) |> summarize(mean = mean(StarRating)) |> arrange(desc(mean)) |> tail()
+
+```
+
+# Preprocessing
+
+## Corpus
+
+```{r nrow yelp2}
+
+
+nrow(yelp2)
+
+
+```
+
+```{r corpus}
+#creating a corpus
+
+yelp2$Comment <- gsub("[^\x20-\x7E]", "", yelp2$Comment)
+
+
+yelp2_clean <- yelp2 %>%
+  filter(!is.na(Comment) & str_trim(Comment) != "")
+
+# Now corpus creation is safe
+corpus1 <- corpus(yelp2_clean, text_field = "Comment")
+docvars(corpus1, "RestaurantName") <- yelp2_clean$RestaurantName
+
+ndoc(corpus1)
+
+
+```
+
+## Tokens and TFIDF
+```{r tokens}
+docvars(corpus1, "RestaurantName") <- yelp2$RestaurantName
+
+#Tokenize
+tokens1 <- corpus1 |> 
+  tokens(remove_punct = TRUE, remove_numbers = TRUE, remove_symbols = TRUE) |> 
+  tokens_tolower() |> 
+  tokens_remove(pattern = stopwords("english")) |> 
+  tokens_wordstem()
+
+#Create DFM from tokens
+dfm1 <- dfm(tokens1)
+dfm_tfidf1 <- dfm_tfidf(dfm1)
+tfidf_mat <- as.matrix(dfm_tfidf1)
+
+nrow(tfidf_mat)
+
+```
+
+
+
+
+
+## DFM Inspection
+
+```{r dfm dimensions}
+
+dim(dfm1)
+
+```
+
+```{r dfm features}
+
+colnames(dfm1)[1:20]
+
+```
+
+
+## Top Word per Restaurant
+
+```{r word frequency}
+freq_weight <- textstat_frequency(dfm1,
+n = 1,
+groups = yelp2$RestaurantName)
+
+freq_weight
+
+```
+
+## Word Cloud
+
+```{r word cloud 1}
+textplot_wordcloud(
+dfm1,
+min_size = 0.5,
+max_size = 4,
+min_count = 3,
+max_words = 200,
+color = "darkblue",
+font = NULL,
+adjust = 0,
+rotation = 0.1,
+random_order = FALSE,
+random_color = FALSE,
+ordered_color = FALSE,
+labelcolor = "gray20",
+labelsize = 1.5,
+labeloffset = 0,
+fixed_aspect = TRUE,
+comparison = FALSE
+)
+10
+
+
+```
+# Bi-Grams
+
+```{r bi grams}
+
+bigrams <-tokens1 |>
+tokens_ngrams(n=2)
+bigrams_dfm <- dfm(bigrams)
+tstat2 <- textstat_frequency(bigrams_dfm)
+head(tstat2, 10)
+```
+## Top Bi-Grams per Restaurant
+
+```{r bigram word frequency}
+freq_weight <- quanteda.textstats::textstat_frequency(bigrams_dfm,
+n = 1,
+groups = yelp2$RestaurantName)
+
+
+freq_weight
+
+```
+
+## Bi-Gram Word Cloud
+
+```{r bigrams wordcloud}
+textplot_wordcloud(
+bigrams_dfm,
+min_size = 0.5,
+max_size = 4,
+min_count = 3,
+max_words = 200,
+color = "darkblue",
+font = NULL,
+adjust = 0,
+rotation = 0.1,
+random_order = FALSE,
+random_color = FALSE,
+ordered_color = FALSE,
+labelcolor = "gray20",
+labelsize = 1.5,
+labeloffset = 0,
+fixed_aspect = TRUE,
+comparison = FALSE
+)
+10
+
+```
+# Zip Code
+
+```{r extract zip code}
+
+yelp2$Zip <- str_extract(yelp2$Address, "\\b\\d{5}(-\\d{4})?\\b")
+
+```
+
+## Zip code analysis:
+
+```{r zip code analysis}
+yelp2 |> filter(Zip == 13151)
+
+yelp2$Zip[yelp2$Zip == "13151"] <- "90094"
+
+yelp2 |> filter(Zip == 11720)
+
+yelp2$Zip[yelp2$Zip == "11720"] <- "91604"
+
+zip_summary <- yelp2 %>%
+  filter(!is.na(Zip)) %>%
+  group_by(Zip) %>%
+  summarize(AverageRating = mean(StarRating, na.rm = TRUE),
+            Count = n()) %>%
+  arrange(desc(AverageRating))
+
+zip_summary
+
+```
+```{r zip graph}
+
+ggplot(zip_summary, aes(x = reorder(Zip, -AverageRating), y = AverageRating)) +
+  geom_col(fill = "steelblue") +
+  labs(
+    title = "Average Yelp Rating by ZIP Code",
+    x = "ZIP Code",
+    y = "Average Star Rating"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+## Heat Map
+
+```{r heat map}
+library(ggplot2)
+library(tigris)   # for ZIP shapefiles
+library(sf)       # for spatial handling
+
+options(tigris_use_cache = TRUE)
+
+
+# 1. Get ZIP shapefiles (all ZCTAs in US)
+zip_shapes <- zctas(cb = TRUE, year = 2020)
+
+# 2. Get Los Angeles County boundary
+la_county <- counties(state = "CA", cb = TRUE, year = 2020) %>%
+  filter(NAME == "Los Angeles")
+
+# 3. Join shapefile with your ZIP summary
+zip_shapes <- zip_shapes %>%
+  mutate(ZCTA5CE20 = as.character(ZCTA5CE20)) %>%
+  left_join(zip_summary, by = c("ZCTA5CE20" = "Zip"))
+
+# 4. Clip ZIP shapes to Los Angeles County
+zip_shapes_la <- st_intersection(st_make_valid(zip_shapes), st_make_valid(la_county))
+
+# 6. Plot LA heatmap
+ggplot(zip_shapes_la) +
+  geom_sf(aes(fill = AverageRating), color = "white", size = 0.2) +
+  scale_fill_gradient(low = "red", high = "green", na.value = "grey90") +
+  labs(title = "Average Yelp Star Rating by ZIP Code in Los Angeles",
+       fill = "Rating") +
+  theme_minimal()
+
+```
+
+# Sentiment Analysis
+
+```{r LSA}
+
+lsa_model <- lsa(tfidf_mat)
+
+```
+
+
+
+
+```{r LSA topics}
+
+
+lsa_docs <- as.data.frame(lsa_model$tk)
+lsa_docs$ethnicity <- yelp2$ethnicity
+lsa_docs$food_type <- yelp2$food_type
+lsa_docs$starRating <- yelp2$StarRating
+
+lsa_model$tk[1:5, 1:5]
+lsa_model$dk[1:5, 1:5]
+lsa_model$sk[1:4]
+```
+
+
+```{r topic analysis}
+terms_topics <- as.data.frame(lsa_model$dk)  # terms x topics matrix
+terms_topics$term <- rownames(terms_topics)
+
+library(dplyr)
+library(tidyr)
+
+# Convert to long format: term, topic, weight
+terms_long <- terms_topics %>%
+  pivot_longer(cols = -term, names_to = "topic", values_to = "weight")
+
+# Get top N words by absolute weight per topic
+top_words_per_topic <- terms_long %>%
+  group_by(topic) %>%
+  slice_max(order_by = abs(weight), n = 10) %>%
+  arrange(topic, desc(abs(weight)))
+
+print(top_words_per_topic)
+
+```
+
+
+
+```{r LSA topic scores by ethnicity}
+
+n_topics <- ncol(lsa_docs) - ncol(yelp2)
+  
+colnames(lsa_docs)[1:n_topics] <- paste0("Topic", 1:n_topics)
+
+lsa_docs |>
+  group_by(ethnicity) |>
+  summarise(across(starts_with("V"), mean, na.rm = TRUE))
+```
+
+# Cluster Restaurants by Topics
+
+```{r LSA space}
+
+lsa_space <- textmodel_lsa(dfm1)
+
+lsa_scores <- as.data.frame(lsa_space$docs)
+
+restaurant_scores <- cbind(Restaurant = yelp1$RestaurantName, lsa_scores)
+
+```
+
+```{r restaurant score by topic}
+
+restaurant_topic_means <- restaurant_scores |>
+  group_by(Restaurant) |>
+  summarize(across(starts_with("V"), mean, na.rm = TRUE))
+```
+
+```{r cluster}
+
+lsa_matrix <- restaurant_topic_means |> select(-Restaurant)
+
+# k-means clustering (try different values of k)
+set.seed(123)
+k_clusters <- kmeans(lsa_matrix, centers = 5)
+
+# Add cluster labels
+restaurant_topic_means$cluster <- k_clusters$cluster
+
+pca <- prcomp(lsa_matrix, scale. = TRUE)
+
+ggplot(data.frame(pca$x[,1:2], Restaurant = restaurant_topic_means$Restaurant),
+       aes(PC1, PC2)) +
+  geom_point(alpha = 0.6) +
+  geom_text(aes(label = Restaurant), size = 2, vjust = 1.5)
+```
+
+# Sentiment Analysis
+
+## By Review
+
+```{r manual sentiment}
+positive_bing <- scan("positive-words-1.txt", what = "char", sep = "\n",
+skip = 35, quiet = T)
+
+negative_bing <- scan("negative-words-1.txt", what = "char", sep = "\n",
+skip = 35, quiet = T)
+
+sentiment_bing <- dictionary(list("positive" = positive_bing, "negative" = negative_bing))
+
+dfm_sentiment <- corpus1 |> tokens() |> dfm() |> dfm_lookup(sentiment_bing)
+dfm_sentiment
+
+```
+
+```{r sentiment proportions}
+dfm_sentiment_prop <- dfm_weight(dfm_sentiment, scheme = "prop")
+dfm_sentiment_prop
+
+```
+
+# Positive and Negative Bi-Grams
+
+```{r pos neg bigrams}
+
+
+# Extract bigram features
+bigram_features <- featnames(bigrams_dfm)
+
+# Split bigrams into two words
+bigram_words <- str_split(bigram_features, pattern = "_", simplify = TRUE)
+
+# Check if either word is positive or negative
+sentiment <- ifelse(
+  bigram_words[,1] %in% positive_bing | bigram_words[,2] %in% positive_bing, "positive",
+  ifelse(bigram_words[,1] %in% negative_bing | bigram_words[,2] %in% negative_bing, "negative", NA)
+)
+
+# Create a data frame with bigrams and their sentiment
+bigram_sentiment_df <- data.frame(
+  bigram = bigram_features,
+  sentiment = sentiment,
+  stringsAsFactors = FALSE
+)
+
+# Filter only bigrams with sentiment
+bigram_sentiment_df <- bigram_sentiment_df %>% filter(!is.na(sentiment))
+
+# Positive bigrams
+pos_bigrams <- bigram_sentiment_df %>% filter(sentiment == "positive") %>% pull(bigram)
+dfm_pos <- dfm_select(bigrams_dfm, pattern = pos_bigrams)
+
+# Negative bigrams
+neg_bigrams <- bigram_sentiment_df %>% filter(sentiment == "negative") %>% pull(bigram)
+dfm_neg <- dfm_select(bigrams_dfm, pattern = neg_bigrams)
+
+# Convert frequency vectors to repeated terms as strings
+pos_freq <- colSums(dfm_pos)
+neg_freq <- colSums(dfm_neg)
+
+pos_text <- paste(rep(names(pos_freq), times = pos_freq), collapse = " ")
+neg_text <- paste(rep(names(neg_freq), times = neg_freq), collapse = " ")
+
+# Create a new dfm with two documents: Positive and Negative
+comparison_dfm <- dfm(tokens(c(Positive = pos_text, Negative = neg_text)))
+
+# Now plot
+textplot_wordcloud(
+  comparison_dfm,
+  min_size = 0.5,
+  max_size = 4,
+  min_count = 3,
+  max_words = 200,
+  color = c("darkgreen", "firebrick"),
+  comparison = TRUE,
+  random_order = FALSE
+)
+
+```
+
+## By Restaurant and Ethnicity
+
+```{r other sentiment}
+
+yelp2 <- yelp2 %>% mutate(doc_id = row_number())
+
+sent <- with(
+  yelp2,
+  sentiment_by(
+    get_sentences(Comment)
+  ))
+
+sent$doc_id <- as.integer(sent$element_id)
+
+head(sent)
+
+sent_rest <- sentiment_by(
+  yelp2$Comment,
+  list(yelp2$doc_id, yelp2$RestaurantName)
+)
+
+
+head(sent_rest)
+
+```
+
+## Feature Level Sentiment Analysis
+
+```{r flsa 1}
+#POS tagging
+suppressMessages(suppressWarnings(library(cleanNLP)))
+
+cnlp_init_udpipe()
+
+yelp2_postag <- yelp2 |> cnlp_annotate(text = "Comment")
+
+head(yelp2_postag)
+
+```
+
+```{r flsa 2}
+
+noun_sentiment <- yelp2_postag$token %>%
+  filter(xpos %in% c("NN", "NNS", "NNP", "NNPS")) %>%
+  mutate(doc_id = as.integer(doc_id)) %>%
+  left_join(sent, by = c("doc_id" = "doc_id"))
+
+
+```
+
+# Nouns that drive Satisfaction
+```{r nouns that drive satisfaction}
+noun_sentiment_summary <- noun_sentiment %>%
+  group_by(lemma) %>%
+  summarize(
+    avg_sentiment = mean(ave_sentiment, na.rm = TRUE),
+    count = n()
+  ) %>%
+  filter(count >= 10) %>%
+  arrange(avg_sentiment)
+
+head(noun_sentiment_summary, 10)
+tail(noun_sentiment_summary, 10)
+```
+# Adjectives that drive Satisfaction
+```{r adjs that drive satisfaction}
+
+adj_sentiment <- yelp2_postag$token %>%
+  filter(xpos %in% c("JJ", "JJR", "JJS")) %>%
+  mutate(doc_id = as.integer(doc_id)) %>%
+  left_join(sent, by = c("doc_id" = "doc_id"))
+
+adj_sentiment_summary <- adj_sentiment %>%
+  group_by(lemma) %>%
+  summarize(
+    avg_sentiment = mean(ave_sentiment, na.rm = TRUE),
+    count = n()
+  ) %>%
+  filter(count >= 10) %>%
+  arrange(avg_sentiment)
+
+head(adj_sentiment_summary, 10)
+tail(adj_sentiment_summary, 10)
+```
+
+# TOP PARTS of SPEECH
+```{r combined}
+full_sentiment <- yelp2_postag$token %>%
+  filter(xpos %in% c("JJ", "JJR", "JJS", "NN", "NNS", "NNP", "NNPS", "VB", "VBD")) %>%
+  mutate(doc_id = as.integer(doc_id)) %>%
+  left_join(sent, by = c("doc_id" = "doc_id"))
+
+
+full_sentiment_summary <- full_sentiment %>%
+  group_by(lemma) %>%
+  summarize(
+    avg_sentiment = mean(ave_sentiment, na.rm = TRUE),
+    count = n()
+  ) %>%
+  filter(count >= 30) %>%
+  arrange(desc(avg_sentiment))
+
+head(adj_sentiment_summary, 30)
+tail(adj_sentiment_summary, 30)
+
+```
+# Nouns for Top Restaurants
+```{r top nouns}
+library(dplyr)
+library(sentimentr)
+library(cleanNLP)
+library(ggplot2)
+
+
+# 1. Find the highest star rating restaurant(s)
+top_restaurants <- yelp2 %>%
+  group_by(RestaurantName) %>%
+  summarise(avg_rating = mean(StarRating, na.rm = TRUE)) %>%
+  filter(avg_rating == max(avg_rating)) %>%
+  pull(RestaurantName)
+
+# 2. Filter yelp2 for comments of top restaurant(s)
+top_restaurant_reviews <- yelp2 %>%
+  filter(RestaurantName %in% top_restaurants)
+
+# 3. Get sentences from filtered comments
+sentences <- get_sentences(top_restaurant_reviews$Comment)
+
+# 4. Calculate sentence-level sentiment
+sent_df <- sentiment(sentences)  # has element_id, sentence_id, sentiment
+
+# 5. Add doc_id to filtered data for cleanNLP
+top_restaurant_reviews <- top_restaurant_reviews %>%
+  mutate(doc_id = row_number())
+
+# 6. POS tagging on filtered comments
+pos_annotations <- top_restaurant_reviews %>%
+  cnlp_annotate(text = "Comment")
+
+# 7. Extract noun lemmas as aspect candidates
+aspect_candidates <- pos_annotations$token %>%
+  filter(xpos %in% c("NN", "NNS", "NNP", "NNPS")) %>%
+  select(doc_id, sid, lemma) %>%
+  distinct()
+
+# 8. Join aspect candidates with sentence sentiment
+aspect_sentiment <- aspect_candidates %>%
+  left_join(sent_df, by = c("doc_id" = "element_id", "sid" = "sentence_id")) %>%
+  select(lemma, sentiment) %>%
+  filter(!is.na(sentiment))
+
+# 9. Aggregate average sentiment and mention count by aspect
+aspect_summary <- aspect_sentiment %>%
+  group_by(lemma) %>%
+  summarise(
+    avg_sentiment = mean(sentiment, na.rm = TRUE),
+    mentions = n()
+  ) %>%
+  filter(mentions > 5) %>%  # adjust threshold as needed
+  arrange(desc(avg_sentiment))
+
+# 10. View top praised nouns driving satisfaction
+top_praised_aspects <- aspect_summary %>% slice_max(avg_sentiment, n = 15)
+
+print(top_praised_aspects)
+
+# Optional: plot top praised aspects
+ggplot(top_praised_aspects, aes(x = reorder(lemma, avg_sentiment), y = avg_sentiment)) +
+  geom_col(fill = "darkgreen") +
+  coord_flip() +
+  labs(title = paste("Top Praised Nouns Driving Satisfaction in", top_restaurants),
+       x = "Noun (Aspect)",
+       y = "Average Sentiment")
+
+
+```
+
+# Price
+
+```{r clean price}
+#variable into a factor with ordered levels:
+
+ unique(yelp2$Price)
+
+yelp2 <- yelp2 |>
+  mutate(price_num = case_when(
+    Price == "$"   ~ 1,
+    Price == "$$"  ~ 2,
+    Price == "$$$" ~ 3,
+    Price == "$$$$" ~ 4,
+    TRUE           ~ NA_real_
+  )) |>
+  mutate(price_factor = factor(price_num, levels = c(1, 2, 3, 4),
+                               labels = c("Low", "Medium", "High", "Very High"),
+                               ordered = TRUE))
+price_summary <- yelp2 %>%
+  filter(!is.na(price_factor)) %>%
+  group_by(price_factor) %>%
+  summarize(AverageRating = mean(StarRating, na.rm = TRUE),
+            Count = n()) %>%
+  arrange(desc(AverageRating))
+
+price_summary
+
+
+```
+
+```{r price plot}
+ggplot(price_summary, aes(x = reorder(price_factor, -AverageRating), y = AverageRating)) +
+  geom_col(fill = "steelblue") +
+  labs(
+    title = "Average Yelp Rating by Price",
+    x = "Price",
+    y = "Average Star Rating"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+
+# Regression for StarRating
+
+```{r top bigrams}
+top_bigrams <- tstat2 %>%
+  filter(docfreq > 40) %>%
+  pull(feature)
+
+bigrams_dfm_filtered <- bigrams_dfm[, top_bigrams]
+
+bigram_features <- convert(bigrams_dfm_filtered, to = "data.frame")
+
+# Ensure doc_id is numeric
+bigram_features$doc_id <- as.numeric(str_remove(bigram_features$doc_id, "text"))
+
+```
+
+```{r star rating}
+
+library(randomForest)
+
+# Step 1: Extract and filter noun lemmas by POS
+full_tokens <- yelp2_postag$token %>%
+  filter(xpos %in% c("JJ", "JJR", "JJS", "NN", "NNS", "NNP", "NNPS", "VB", "VBD"))
+
+# Step 2: Identify lemmas that appear in >10 docs and Create document-feature matrix only with those lemmas
+frequent_lemmas <- full_tokens %>%
+  distinct(doc_id, lemma) %>%
+  count(lemma) %>%
+  filter(n > 50) %>%
+  pull(lemma)
+
+noun_features <- full_tokens %>%
+  filter(lemma %in% frequent_lemmas) %>%
+  group_by(doc_id, lemma) %>%
+  summarise(freq = n(), .groups = "drop") %>%
+  pivot_wider(names_from = lemma, values_from = freq, values_fill = 0)
+
+full_features <- full_join(noun_features, bigram_features, by = "doc_id") %>%
+  replace(is.na(.), 0)
+
+
+# 3. Merge noun features with main data (using doc_id)
+yelp_model_data <- yelp2 %>%
+  mutate(doc_id = row_number()) %>%
+  select(doc_id, StarRating, ethnicity, food_type, price_factor, Zip) %>%
+  left_join(full_features, by = "doc_id")
+
+# 4. Replace NA and convert to factors
+yelp_model_data_clean <- yelp_model_data %>%
+  mutate(
+    ethnicity = factor(replace_na(ethnicity, "Unknown")),
+    food_type = factor(replace_na(food_type, "Unknown"))
+  )
+
+# Prepare data
+
+yelp_model_data_clean$StarRating <- as.numeric(yelp_model_data_clean$StarRating)
+
+# Join sentiment data to rf_data_clean by RestaurantName
+rf_data_with_sentiment <- yelp_model_data_clean %>%
+  left_join(sent_rest %>% select(doc_id, ave_sentiment), by = "doc_id")
+
+rf_data <- rf_data_with_sentiment %>%
+  select(-doc_id)  # drop ID column
+
+rf_data_clean <- na.omit(rf_data)
+
+rf_data_clean <- rf_data_clean %>% select(-`%`, -'next')
+
+# View the result
+head(rf_data_clean$ave_sentiment)
+
+
+```
+
+
+```{r clean ethnicity}
+library(forcats)
+
+rf_data_clean$ethnicity <- fct_lump(rf_data_clean$ethnicity, n = 50)  # keep top 50, lump rest as "Other"
+rf_data_clean$food_type <- fct_lump_prop(rf_data_clean$food_type, prop = 0.006)
+
+
+```
+
+## Test and Train Split
+
+```{r split into test and train}
+set.seed(42)  # for reproducibility
+
+# Create indices for training set (70% of data)
+train_indices <- sample(seq_len(nrow(rf_data_clean)), size = 0.7 * nrow(rf_data_clean))
+
+# Split the data
+train_data <- rf_data_clean[train_indices, ]
+test_data <- rf_data_clean[-train_indices, ]
+
+```
+
+## Random Forest
+```{r random forest}
+set.seed(42)
+rf_model <- randomForest(
+  StarRating ~ ., 
+  data = train_data,
+  importance = TRUE,
+  ntree = 500
+)
+
+rf_model
+```
+## Model Evaluation
+```{r model eval}
+
+# 4. Evaluate model performance
+preds <- predict(rf_model)
+rmse <- sqrt(mean((preds - rf_data$StarRating)^2))
+cat("Training RMSE:", round(rmse, 3), "\n")
+
+# 5. Variable Importance
+varImp <- importance(rf_model, type = 1)
+varImpSorted <- varImp[order(varImp[,1], decreasing = TRUE), , drop=FALSE]
+
+head(varImpSorted, 15)  # top predictors
+
+
+```
+# Top Predictors of Star Rating
+```{r predictors graph}
+
+library(ggplot2)
+
+# Create a data frame from the importance matrix
+varImp_df <- data.frame(
+  Variable = rownames(varImpSorted),
+  Importance = varImpSorted[, 1]
+)
+
+# Keep only the top 15
+top_vars <- head(varImp_df, 15)
+
+# Plot
+ggplot(top_vars, aes(x = reorder(Variable, Importance), y = Importance)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(
+    title = "Top 15 Important Variables in Random Forest",
+    x = "Variable",
+    y = "Mean Decrease in Accuracy"
+  ) +
+  theme_minimal()
+```
+## Random Forest Tree
+```{r tree}
+tree <- getTree(rf_model, k = 1, labelVar = TRUE)
+# Use rpart to plot a similar-looking tree
+library(rpart)
+library(rpart.plot)
+tree_model <- rpart(StarRating ~ ., data = train_data)  # replace Target and your_data accordingly
+rpart.plot(tree_model)
+
+```
+
+# Predictions
+```{r predictions}
+predictions <- predict(rf_model, newdata = test_data)
+
+# Get true values
+y_true <- test_data$StarRating
+
+# Get predicted values
+y_pred <- predict(rf_model, newdata = test_data)
+
+# RMSE
+rmse <- sqrt(mean((y_true - y_pred)^2))
+
+# MAE
+mae <- mean(abs(y_true - y_pred))
+
+# R-squared
+r_squared <- 1 - sum((y_true - y_pred)^2) / sum((y_true - mean(y_true))^2)
+
+# Accuracy within ±0.5 stars
+accuracy_0.5 <- mean(abs(y_true - y_pred) <= 0.5)
+
+# Print results
+cat("RMSE:", rmse, "\n")
+cat("MAE:", mae, "\n")
+cat("R-squared:", r_squared, "\n")
+cat("Accuracy (±0.5 stars):", accuracy_0.5, "\n")
+
+```
+# Analysis
+By far, the biggest predictors of star rating were ‘ethnicity’ and ‘food_type’ with accuracy of over 72% and 64% respectively. 
+
+The next best predictor was Zip code, which we could already tell from our heat map had a significant effect on star rating. Paired with the fifth most important predictor, the appearance of the word ‘view’ in a comment, there is an implication that some zip codes may offer better views and aesthetics than others, leading to a better dining experience.
+
+The fourth most important predictor is price, which is again supported by our POS tagging with the term “Affordability” driving positive sentiment and “overpriced”, “bill”, and “tax” driving negative sentiment. 
+
+The fifth most important predictor is “owner” which indicates that the reviewers who had a positive experience with the owner generally gave higher reviews. Furthermore, POS tagging indicates that drivers of negative sentiment include words such as “horrible”, “rude”, and “annoyed”, all implying these reviewers had a poor interaction with staff and/or owner. We imagine that in context, an owner who engages with customers and is “personable” is seen in a more positive light. In fact, terms such as ‘hospitality’, ‘charm’, and ‘personable’ were all top indicators of positive sentiment, behind only “Woo”, which we believe indicates a sincere effort by the staff to give the customers a positive dining experience.
+
+Other important predictors of note are 'Hollywood' and 'ambiance', again indicating the importance of location and general atmosphere of the restaurant. This is also supported by our POS tagging, as "cleanliness" is a high driver of positive sentiment and the terms "sticky", "dirty", and "empty" were all drivers of negative sentiment. Other terms of note include "hair" and "rock": two items that one would be horrified to find in their meal.
+
+The next few important predictors are food-related, more specifically, chicken, rice, noodles, and crab. Another important predictor is "ingredients" which indicates that overal quality has a high importance. It should be noted that drivers of negative sentiment include "bland", "salty", and "greasy," so these top predictor foods, whether good or bad, can make or break a patron’s dining experience.
